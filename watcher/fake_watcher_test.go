@@ -9,7 +9,7 @@ import (
 )
 
 func TestFakeWatcher(t *testing.T) {
-	w := NewFakeWatcher(nil)
+	w := NewFakeWatcher()
 	defer w.Close()
 
 	handle, eventsChannel := w.Events()
@@ -80,7 +80,7 @@ func TestFakeWatcher(t *testing.T) {
 }
 
 func TestFakeWatcherUnwatchedFiles(t *testing.T) {
-	w := NewFakeWatcher(nil)
+	w := NewFakeWatcher()
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	_, eventsChannel := w.Events()
@@ -98,7 +98,7 @@ func TestFakeWatcherUnwatchedFiles(t *testing.T) {
 	w.Close()
 	wg.Wait()
 
-	w = NewFakeWatcher(nil)
+	w = NewFakeWatcher()
 	wg = sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -115,7 +115,7 @@ func TestFakeWatcherUnwatchedFiles(t *testing.T) {
 	w.Close()
 	wg.Wait()
 
-	w = NewFakeWatcher(nil)
+	w = NewFakeWatcher()
 	wg = sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -134,7 +134,7 @@ func TestFakeWatcherUnwatchedFiles(t *testing.T) {
 }
 
 func TestNoSuchHandle(t *testing.T) {
-	w := NewFakeWatcher(nil)
+	w := NewFakeWatcher()
 	err := w.Add("foo", 1)
 	if err == nil {
 		t.Error("expecting error, got nil")

@@ -23,9 +23,9 @@ import (
 
 func makeTestTail(t *testing.T) (*Tailer, chan *logline.LogLine, *watcher.FakeWatcher, afero.Fs, string, func()) {
 	fs := afero.NewMemMapFs()
-	w := watcher.NewFakeWatcher(nil)
+	w := watcher.NewFakeWatcher()
 	lines := make(chan *logline.LogLine, 1)
-	ta, err := New(lines, fs, w, nil)
+	ta, err := New(lines, fs, w)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,9 +43,9 @@ func makeTestTailReal(t *testing.T, prefix string) (*Tailer, chan *logline.LogLi
 	}
 
 	fs := afero.NewOsFs()
-	w := watcher.NewFakeWatcher(nil)
+	w := watcher.NewFakeWatcher()
 	lines := make(chan *logline.LogLine, 1)
-	ta, err := New(lines, fs, w, nil)
+	ta, err := New(lines, fs, w)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,26 +333,26 @@ func TestTailerOpenRetries(t *testing.T) {
 }
 
 func TestTailerInitErrors(t *testing.T) {
-	_, err := New(nil, nil, nil, nil)
+	_, err := New(nil, nil, nil)
 	if err == nil {
 		t.Error("expected error")
 	}
 	lines := make(chan *logline.LogLine)
-	_, err = New(lines, nil, nil, nil)
+	_, err = New(lines, nil, nil)
 	if err == nil {
 		t.Error("expected error")
 	}
 	fs := afero.NewMemMapFs()
-	_, err = New(lines, fs, nil, nil)
+	_, err = New(lines, fs, nil)
 	if err == nil {
 		t.Error("expected error")
 	}
-	w := watcher.NewFakeWatcher(nil)
-	_, err = New(lines, fs, w, nil)
+	w := watcher.NewFakeWatcher()
+	_, err = New(lines, fs, w)
 	if err != nil {
 		t.Errorf("unexpected error %s", err)
 	}
-	_, err = New(lines, fs, w, nil, OneShot)
+	_, err = New(lines, fs, w, OneShot)
 	if err != nil {
 		t.Errorf("unexpected error %s", err)
 	}

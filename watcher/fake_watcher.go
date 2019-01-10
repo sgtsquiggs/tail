@@ -26,13 +26,10 @@ type FakeWatcher struct {
 }
 
 // NewFakeWatcher returns a fake Watcher for use in tests.
-func NewFakeWatcher(logger log.Logger) *FakeWatcher {
-	if logger == nil {
-		logger = log.DefaultLogger
-	}
+func NewFakeWatcher() *FakeWatcher {
 	return &FakeWatcher{
 		watches: make(map[string]int),
-		logger:  logger,
+		logger:  log.DefaultLogger,
 	}
 }
 

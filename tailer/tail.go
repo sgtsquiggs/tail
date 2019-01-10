@@ -55,17 +55,25 @@ type Tailer struct {
 	logger log.Logger
 }
 
+// Option used to set trailer options.
+type Option func(*Tailer) error
+
 // OneShot puts the tailer in one-shot mode.
 func OneShot(t *Tailer) error {
 	t.oneShot = true
 	return nil
 }
 
-// New creates a new Tailer.
-func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, l log.Logger, options ...func(*Tailer) error) (*Tailer, error) {
-	if l == nil {
-		l = log.DefaultLogger
+// Logger defines the logger.
+func Logger(l log.Logger) Option {
+	return func(t *Tailer) error {
+		t.logger = l
+		return nil
 	}
+}
+
+// New creates a new Tailer.
+func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, options ...Option) (*Tailer, error) {
 	if lines == nil {
 		return nil, errors.New("can't create tailer without lines channel")
 	}
@@ -82,7 +90,7 @@ func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, l log.Lo
 		handles:      make(map[string]*File),
 		globPatterns: make(map[string]struct{}),
 		runDone:      make(chan struct{}),
-		logger:       l,
+		logger:       log.DefaultLogger,
 	}
 	if err := t.SetOption(options...); err != nil {
 		return nil, err
@@ -94,7 +102,7 @@ func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, l log.Lo
 }
 
 // SetOption takes one or more option functions and applies them in order to Tailer.
-func (t *Tailer) SetOption(options ...func(*Tailer) error) error {
+func (t *Tailer) SetOption(options ...Option) error {
 	for _, option := range options {
 		if err := option(t); err != nil {
 			return err

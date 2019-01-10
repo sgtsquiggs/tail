@@ -43,18 +43,16 @@ type LogWatcher struct {
 	logger log.Logger
 }
 
+// LogWatcherOption used to set trailer options.
+type LogWatcherOption func(*LogWatcher) error
+
 // NewLogWatcher returns a new LogWatcher, or returns an error.
-func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, logger log.Logger) (*LogWatcher, error) {
-	if logger == nil {
-		logger = log.DefaultLogger
-	}
+func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, options ...LogWatcherOption) (*LogWatcher, error) {
 	var f *fsnotify.Watcher
+	var fsErr error
 	if enableFsnotify {
-		var err error
-		f, err = fsnotify.NewWatcher()
-		if err != nil {
-			logger.Warning(err)
-		}
+		// if there is an error, log it after options are applied
+		f, fsErr = fsnotify.NewWatcher()
 	}
 	if f == nil && pollInterval == 0 {
 		pollInterval = time.Millisecond * 250
@@ -63,7 +61,13 @@ func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, logger log.L
 		watcher: f,
 		events:  make([]chan Event, 0),
 		watched: make(map[string]chan Event),
-		logger:  logger,
+		logger:  log.DefaultLogger,
+	}
+	if err := w.SetOption(options...); err != nil {
+		return nil, err
+	}
+	if fsErr != nil {
+		w.logger.Warning(fsErr)
 	}
 	if pollInterval > 0 {
 		w.pollTicker = time.NewTicker(pollInterval)
@@ -76,6 +80,16 @@ func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, logger log.L
 		go w.runEvents()
 	}
 	return w, nil
+}
+
+// SetOption takes one or more option functions and applies them in order to Tailer.
+func (w *LogWatcher) SetOption(options ...LogWatcherOption) error {
+	for _, option := range options {
+		if err := option(w); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Events returns a new readable channel of events from this watcher.

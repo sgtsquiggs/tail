@@ -1,0 +1,18 @@
+# Golang CircleCI 2.0 configuration file
+#
+version: 2
+jobs:
+  test:
+    docker:
+      - image: circleci/golang:1.9
+    working_directory: /go/src/github.com/sgtsquiggs/tail
+    steps:
+      - checkout
+      - run: dep ensure -vendor-only
+      - run: make test-all
+  
+workflows:
+  version: 2
+  test:
+    jobs:
+      - test

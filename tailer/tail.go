@@ -23,8 +23,6 @@ import (
 	log "github.com/sgtsquiggs/tail/logger"
 	"github.com/sgtsquiggs/tail/logline"
 	"github.com/sgtsquiggs/tail/watcher"
-
-	"github.com/spf13/afero"
 )
 
 var (
@@ -38,7 +36,6 @@ var (
 type Tailer struct {
 	lines chan<- *logline.LogLine // Logfile lines being emitted.
 	w     watcher.Watcher
-	fs    afero.Fs // mockable filesystem interface
 
 	handlesMu sync.RWMutex     // protects `handles'
 	handles   map[string]*File // File handles for each pathname.
@@ -73,12 +70,9 @@ func Logger(l log.Logger) Option {
 }
 
 // New creates a new Tailer.
-func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, options ...Option) (*Tailer, error) {
+func New(lines chan<- *logline.LogLine, w watcher.Watcher, options ...Option) (*Tailer, error) {
 	if lines == nil {
 		return nil, errors.New("can't create tailer without lines channel")
-	}
-	if fs == nil {
-		return nil, errors.New("can't create tailer without FS")
 	}
 	if w == nil {
 		return nil, errors.New("can't create tailer without W")
@@ -86,7 +80,6 @@ func New(lines chan<- *logline.LogLine, fs afero.Fs, w watcher.Watcher, options 
 	t := &Tailer{
 		lines:        lines,
 		w:            w,
-		fs:           fs,
 		handles:      make(map[string]*File),
 		globPatterns: make(map[string]struct{}),
 		runDone:      make(chan struct{}),
@@ -168,7 +161,7 @@ func (t *Tailer) TailPattern(pattern string) error {
 	if err := t.watchDirname(pattern); err != nil {
 		return err
 	}
-	matches, err := afero.Glob(t.fs, pattern)
+	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return err
 	}
@@ -252,7 +245,7 @@ func (t *Tailer) openLogPath(pathname string, seekToStart bool) error {
 	if err := t.watchDirname(pathname); err != nil {
 		return err
 	}
-	f, err := NewFile(t.fs, pathname, t.lines, seekToStart || t.oneShot, t.logger)
+	f, err := NewFile(pathname, t.lines, seekToStart || t.oneShot, t.logger)
 	if err != nil {
 		// Doesn't exist yet. We're watching the directory, so we'll pick it up
 		// again on create; return successfully.

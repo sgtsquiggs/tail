@@ -17,7 +17,6 @@ import (
 	"github.com/sgtsquiggs/tail/logline"
 
 	"github.com/pkg/errors"
-	"github.com/spf13/afero"
 )
 
 var (
@@ -37,8 +36,7 @@ type File struct {
 	Name     string // Given name for the file (possibly relative, used for displau)
 	Pathname string // Full absolute path of the file used internally
 	regular  bool   // Remember if this is a regular file (or a pipe)
-	fs       afero.Fs
-	file     afero.File
+	file     *os.File
 	partial  *bytes.Buffer
 	lines    chan<- *logline.LogLine // output channel for lines read
 	logger   log.Logger
@@ -49,7 +47,7 @@ type File struct {
 // retry on error to open the file. `seekToStart` indicates that the file
 // should be tailed from offset 0, not EOF; the latter is true for rotated
 // files and for files opened when mtail is in oneshot mode.
-func NewFile(fs afero.Fs, pathname string, lines chan<- *logline.LogLine, seekToStart bool, logger log.Logger) (*File, error) {
+func NewFile(pathname string, lines chan<- *logline.LogLine, seekToStart bool, logger log.Logger) (*File, error) {
 	if logger == nil {
 		logger = log.DefaultLogger
 	}
@@ -58,7 +56,7 @@ func NewFile(fs afero.Fs, pathname string, lines chan<- *logline.LogLine, seekTo
 	if err != nil {
 		return nil, err
 	}
-	f, err := open(fs, absPath, false, logger)
+	f, err := open(absPath, false, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +83,10 @@ func NewFile(fs afero.Fs, pathname string, lines chan<- *logline.LogLine, seekTo
 	default:
 		return nil, errors.Errorf("Can't open files with mode %v: %s", m&os.ModeType, absPath)
 	}
-	return &File{pathname, absPath, regular, fs, f, bytes.NewBufferString(""), lines, logger}, nil
+	return &File{pathname, absPath, regular, f, bytes.NewBufferString(""), lines, logger}, nil
 }
 
-func open(fs afero.Fs, pathname string, seenBefore bool, logger log.Logger) (afero.File, error) {
+func open(pathname string, seenBefore bool, logger log.Logger) (*os.File, error) {
 	retries := 3
 	retryDelay := 1 * time.Millisecond
 	shouldRetry := func() bool {
@@ -98,9 +96,9 @@ func open(fs afero.Fs, pathname string, seenBefore bool, logger log.Logger) (afe
 		}
 		return retries > 0
 	}
-	var f afero.File
+	var f *os.File
 Retry:
-	f, err := fs.OpenFile(pathname, os.O_RDONLY|syscall.O_NONBLOCK, 0600)
+	f, err := os.OpenFile(pathname, os.O_RDONLY|syscall.O_NONBLOCK, 0600)
 	if err != nil {
 		logErrors.Add(pathname, 1)
 		if shouldRetry() {
@@ -129,7 +127,7 @@ func (f *File) Follow() error {
 			return err
 		}
 	}
-	s2, err := f.fs.Stat(f.Pathname)
+	s2, err := os.Stat(f.Pathname)
 	if err != nil {
 		f.logger.Infof("Stat failed on %q: %s", f.Pathname, err)
 		return nil
@@ -154,7 +152,7 @@ func (f *File) doRotation() error {
 	f.logger.Info("doing the rotation flush read")
 	f.Read()
 	logRotations.Add(f.Name, 1)
-	newFile, err := open(f.fs, f.Pathname, true /*seenBefore*/, f.logger)
+	newFile, err := open(f.Pathname, true /*seenBefore*/, f.logger)
 	if err != nil {
 		return err
 	}
@@ -170,6 +168,9 @@ func (f *File) Read() error {
 	b := make([]byte, 0, 4096)
 	totalBytes := 0
 	for {
+		if err := f.file.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			f.logger.Info(err)
+		}
 		n, err := f.file.Read(b[:cap(b)])
 		f.logger.Infof("Read count %v err %v", n, err)
 		totalBytes += n

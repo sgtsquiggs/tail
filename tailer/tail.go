@@ -52,7 +52,7 @@ type Tailer struct {
 	logger log.Logger
 }
 
-// Option used to set trailer options.
+// Option used to set tailer options.
 type Option func(*Tailer) error
 
 // OneShot puts the tailer in one-shot mode.

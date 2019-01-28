@@ -43,11 +43,19 @@ type LogWatcher struct {
 	logger log.Logger
 }
 
-// LogWatcherOption used to set trailer options.
-type LogWatcherOption func(*LogWatcher) error
+// Option used to set trailer options.
+type Option func(*LogWatcher) error
+
+// Logger defines the logger.
+func Logger(l log.Logger) Option {
+	return func(t *LogWatcher) error {
+		t.logger = l
+		return nil
+	}
+}
 
 // NewLogWatcher returns a new LogWatcher, or returns an error.
-func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, options ...LogWatcherOption) (*LogWatcher, error) {
+func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, options ...Option) (*LogWatcher, error) {
 	var f *fsnotify.Watcher
 	var fsErr error
 	if enableFsnotify {
@@ -83,7 +91,7 @@ func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, options ...L
 }
 
 // SetOption takes one or more option functions and applies them in order to Tailer.
-func (w *LogWatcher) SetOption(options ...LogWatcherOption) error {
+func (w *LogWatcher) SetOption(options ...Option) error {
 	for _, option := range options {
 		if err := option(w); err != nil {
 			return err

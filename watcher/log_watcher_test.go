@@ -7,11 +7,14 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
+	"github.com/sgtsquiggs/tail/logger"
 	"io/ioutil"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -287,5 +290,52 @@ func TestWatcherErrors(t *testing.T) {
 	expected := strconv.FormatInt(orig+1, 10)
 	if diff := testutil.Diff(expected, expvar.Get("log_watcher_error_count").String()); diff != "" {
 		t.Errorf("log watcher error count not increased:\n%s", diff)
+	}
+}
+
+func TestWatcherNewFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping log watcher test in short mode")
+	}
+	tests := []struct {
+		d time.Duration
+		b bool
+	}{
+		{0, true},
+		{10 * time.Millisecond, false},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%s %v", test.d, test.b), func(t *testing.T) {
+			w, err := NewLogWatcher(test.d, test.b)
+			testutil.FatalIfErr(t, err)
+			tmpDir, rmTmpDir := testutil.TestTempDir(t)
+			defer rmTmpDir()
+			handle, eventsChan := w.Events()
+			testutil.FatalIfErr(t, w.Add(tmpDir, handle))
+			result := []Event{}
+			done := make(chan struct{})
+			wg := sync.WaitGroup{}
+			go func() {
+				for event := range eventsChan {
+					logger.DefaultLogger.Infof("Event: %v", event)
+					result = append(result, event)
+					if event.Op == Update && event.Pathname == tmpDir {
+						testutil.FatalIfErr(t, w.Add(path.Join(tmpDir, "log"), handle))
+					}
+					wg.Done()
+				}
+				close(done)
+			}()
+			wg.Add(2)
+			testutil.TestOpenFile(t, path.Join(tmpDir, "log"))
+			time.Sleep(250 * time.Millisecond)
+			w.Close()
+			<-done
+			expected := []Event{{Op: Create, Pathname: path.Join(tmpDir, "log")}}
+			if diff := testutil.Diff(expected, result); diff != "" {
+				t.Errorf("event unexpected: diff:\n%s", diff)
+				t.Logf("received:\n%v", result)
+			}
+		})
 	}
 }

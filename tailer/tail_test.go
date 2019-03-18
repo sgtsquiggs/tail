@@ -75,10 +75,7 @@ func TestHandleLogUpdate(t *testing.T) {
 	}
 
 	wg.Add(4)
-	_, err = f.WriteString("a\nb\nc\nd\n")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "a\nb\nc\nd\n")
 	// f.Seek(0, 0)
 	w.InjectUpdate(logfile)
 
@@ -125,9 +122,7 @@ func TestHandleLogTruncate(t *testing.T) {
 	}
 
 	wg.Add(3)
-	if _, err := f.WriteString("a\nb\nc\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "a\nb\nc\n")
 	//time.Sleep(10 * time.Millisecond)
 	w.InjectUpdate(logfile)
 	wg.Wait()
@@ -136,14 +131,13 @@ func TestHandleLogTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "File.Truncate" does not change the file offset.
-	f.Seek(0, 0)
+	_, err := f.Seek(0, 0)
+	testutil.FatalIfErr(t, err)
 	w.InjectUpdate(logfile)
 	//time.Sleep(10 * time.Millisecond)
 
 	wg.Add(2)
-	if _, err := f.WriteString("d\ne\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "d\ne\n")
 	w.InjectUpdate(logfile)
 	//time.Sleep(10 * time.Millisecond)
 
@@ -189,26 +183,17 @@ func TestHandleLogUpdatePartialLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = f.WriteString("a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "a")
 	//f.Seek(0, 0)
 	w.InjectUpdate(logfile)
 
 	//f.Seek(1, 0)
-	_, err = f.WriteString("b")
-	if err != nil {
-		t.Error(err)
-	}
+	testutil.WriteString(t, f, "b")
 	// f.Seek(1, 0)
 	w.InjectUpdate(logfile)
 
 	//f.Seek(2, 0)
-	_, err = f.WriteString("\n")
-	if err != nil {
-		t.Error(err)
-	}
+	testutil.WriteString(t, f, "\n")
 	//f.Seek(2, 0)
 	w.InjectUpdate(logfile)
 
@@ -252,7 +237,7 @@ func TestTailerOpenRetries(t *testing.T) {
 		}
 		close(done)
 	}()
-	ta.AddPattern(logfile)
+	testutil.FatalIfErr(t, ta.AddPattern(logfile))
 
 	if err := ta.TailPath(logfile); err == nil || !os.IsPermission(err) {
 		t.Fatalf("Expected a permission denied error here: %s", err)
@@ -279,9 +264,7 @@ func TestTailerOpenRetries(t *testing.T) {
 	w.InjectUpdate(logfile)
 	//time.Sleep(10 * time.Millisecond)
 	log.DefaultLogger.Info("write string")
-	if _, err := f.WriteString("\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "\n")
 	w.InjectUpdate(logfile)
 
 	wg.Wait()
@@ -338,9 +321,7 @@ func TestHandleLogRotate(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Add(2)
-	if _, err := f.WriteString("1\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "1\n")
 	log.DefaultLogger.Info("update")
 	w.InjectUpdate(logfile)
 	if err := f.Close(); err != nil {
@@ -358,9 +339,7 @@ func TestHandleLogRotate(t *testing.T) {
 	}
 	log.DefaultLogger.Info("create")
 	w.InjectCreate(logfile)
-	if _, err = f.WriteString("2\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "2\n")
 	log.DefaultLogger.Info("update")
 	w.InjectUpdate(logfile)
 
@@ -402,9 +381,7 @@ func TestHandleLogRotateSignalsWrong(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Add(2)
-	if _, err = f.WriteString("1\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "1\n")
 	log.DefaultLogger.Info("update")
 	w.InjectUpdate(logfile)
 	if err = f.Close(); err != nil {
@@ -422,9 +399,7 @@ func TestHandleLogRotateSignalsWrong(t *testing.T) {
 	log.DefaultLogger.Info("delete")
 	w.InjectDelete(logfile)
 
-	if _, err = f.WriteString("2\n"); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteString(t, f, "2\n")
 	log.DefaultLogger.Info("update")
 	w.InjectUpdate(logfile)
 
@@ -440,4 +415,74 @@ func TestHandleLogRotateSignalsWrong(t *testing.T) {
 	if diff != "" {
 		t.Errorf("result didn't match expected:\n%s", diff)
 	}
+}
+
+func TestTailExpireStaleHandles(t *testing.T) {
+	ta, lines, w, dir, cleanup := makeTestTail(t)
+	defer cleanup()
+
+	result := []*logline.LogLine{}
+	done := make(chan struct{})
+	wg := sync.WaitGroup{}
+	go func() {
+		for line := range lines {
+			log.DefaultLogger.Infof("line %v", line)
+			result = append(result, line)
+			wg.Done()
+		}
+		close(done)
+	}()
+
+	log1 := filepath.Join(dir, "log1")
+	f1 := testutil.TestOpenFile(t, log1)
+	log2 := filepath.Join(dir, "log2")
+	f2 := testutil.TestOpenFile(t, log2)
+
+	if err := ta.TailPath(log1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ta.TailPath(log2); err != nil {
+		t.Fatal(err)
+	}
+	wg.Add(2)
+	testutil.WriteString(t, f1, "1\n")
+	testutil.WriteString(t, f2, "2\n")
+	w.InjectUpdate(log1)
+	w.InjectUpdate(log2)
+	wg.Wait()
+	if err := w.Close(); err != nil {
+		t.Log(err)
+	}
+	<-done
+	if err := ta.Gc(); err != nil {
+		t.Fatal(err)
+	}
+	ta.handlesMu.RLock()
+	if len(ta.handles) != 2 {
+		t.Errorf("expecting 2 handles, got %v", ta.handles)
+	}
+	ta.handlesMu.RUnlock()
+	ta.handlesMu.Lock()
+	ta.handles[log1].LastRead = time.Now().Add(-time.Hour*24 + time.Minute)
+	ta.handlesMu.Unlock()
+	if err := ta.Gc(); err != nil {
+		t.Fatal(err)
+	}
+	ta.handlesMu.RLock()
+	if len(ta.handles) != 2 {
+		t.Errorf("expecting 2 handles, got %v", ta.handles)
+	}
+	ta.handlesMu.RUnlock()
+	ta.handlesMu.Lock()
+	ta.handles[log1].LastRead = time.Now().Add(-time.Hour*24 - time.Minute)
+	ta.handlesMu.Unlock()
+	if err := ta.Gc(); err != nil {
+		t.Fatal(err)
+	}
+	ta.handlesMu.RLock()
+	if len(ta.handles) != 1 {
+		t.Errorf("expecting 1 handles, got %v", ta.handles)
+	}
+	ta.handlesMu.RUnlock()
+	log.DefaultLogger.Info("good")
 }

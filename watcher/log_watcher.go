@@ -7,6 +7,7 @@ import (
 	"expvar"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"time"
@@ -18,9 +19,13 @@ import (
 )
 
 var (
-	eventCount = expvar.NewMap("log_watcher_event_count")
 	errorCount = expvar.NewInt("log_watcher_error_count")
 )
+
+type watch struct {
+	c  chan Event
+	fi os.FileInfo
+}
 
 // LogWatcher implements a Watcher for watching real filesystems.
 type LogWatcher struct {
@@ -30,8 +35,8 @@ type LogWatcher struct {
 	eventsMu sync.RWMutex
 	events   []chan Event
 
-	watchedMu sync.RWMutex          // protects `watched'
-	watched   map[string]chan Event // Names of paths being watched
+	watchedMu sync.RWMutex // protects `watched'
+	watched   map[string]*watch
 
 	stopTicks chan struct{} // Channel to notify ticker to stop.
 
@@ -68,7 +73,7 @@ func NewLogWatcher(pollInterval time.Duration, enableFsnotify bool, options ...O
 	w := &LogWatcher{
 		watcher: f,
 		events:  make([]chan Event, 0),
-		watched: make(map[string]chan Event),
+		watched: make(map[string]*watch),
 		logger:  log.DefaultLogger,
 	}
 	if err := w.SetOption(options...); err != nil {
@@ -112,16 +117,16 @@ func (w *LogWatcher) Events() (int, <-chan Event) {
 
 func (w *LogWatcher) sendEvent(e Event) {
 	w.watchedMu.RLock()
-	c, ok := w.watched[e.Pathname]
+	watch, ok := w.watched[e.Pathname]
 	w.watchedMu.RUnlock()
 	if !ok {
 		d := filepath.Dir(e.Pathname)
 		w.watchedMu.RLock()
-		c, ok = w.watched[d]
+		watch, ok = w.watched[d]
 		w.watchedMu.RUnlock()
 	}
 	if ok {
-		c <- e
+		watch.c <- e
 		return
 	}
 	w.logger.Infof("No channel for path %q", e.Pathname)
@@ -138,14 +143,68 @@ Exit:
 	for {
 		select {
 		case _ = <-w.pollTicker.C:
-			w.watchedMu.RLock()
-			for n, c := range w.watched {
-				c <- Event{Update, n}
+			w.watchedMu.Lock()
+			for n, watched := range w.watched {
+				w.pollWatchedPathLocked(n, watched)
 			}
-			w.watchedMu.RUnlock()
+			w.watchedMu.Unlock()
 		case <-w.stopTicks:
 			w.pollTicker.Stop()
 			break Exit
+		}
+	}
+}
+
+// pollWatchedPathLocked polls an already-watched path for updates.  w.watchedMu must be locked when called.
+func (w *LogWatcher) pollWatchedPathLocked(pathname string, watched *watch) {
+	w.logger.Info("stat")
+	fi, err := os.Stat(pathname)
+	if err != nil {
+		w.logger.Info(err)
+		return
+	}
+
+	// fsnotify does not send update events for the directory itself.
+	if fi.IsDir() {
+		w.pollDirectoryLocked(watched.c, pathname)
+	} else if watched.fi == nil || fi.ModTime().Sub(watched.fi.ModTime()) > 0 {
+		w.logger.Infof("sending update for %s", pathname)
+		watched.c <- Event{Update, pathname}
+	}
+
+	w.logger.Info("Update fi")
+	watched.fi = fi
+}
+
+func (w *LogWatcher) pollDirectoryLocked(c chan Event, pathname string) {
+	matches, err := filepath.Glob(path.Join(pathname, "*"))
+	if err != nil {
+		w.logger.Info(err)
+		return
+	}
+	// TODO(jaq): how do we avoid duplicate notifies for things that are already in the watch list?
+	for _, match := range matches {
+		fi, err := os.Stat(match)
+		if err != nil {
+			w.logger.Info(err)
+			continue
+		}
+
+		watched, ok := w.watched[match]
+		switch {
+		case !ok:
+			w.logger.Infof("sending create for %s", match)
+			c <- Event{Create, match}
+			w.watched[match] = &watch{c: c, fi: fi}
+		case watched.fi != nil && fi.ModTime().Sub(watched.fi.ModTime()) > 0:
+			w.logger.Infof("sending update for %s", match)
+			c <- Event{Update, match}
+			w.watched[match].fi = fi
+		default:
+			w.logger.Infof("No modtime change for %s, no send", match)
+		}
+		if fi.IsDir() {
+			w.pollDirectoryLocked(c, match)
 		}
 	}
 }
@@ -164,7 +223,6 @@ func (w *LogWatcher) runEvents() {
 
 	for e := range w.watcher.Events {
 		w.logger.Infof("watcher event %v", e)
-		eventCount.Add(e.Name, 1)
 		switch {
 		case e.Op&fsnotify.Create == fsnotify.Create:
 			w.sendEvent(Event{Create, e.Name})
@@ -220,17 +278,19 @@ func (w *LogWatcher) Add(path string, handle int) error {
 		return errors.Wrapf(err, "Failed to lookup absolutepath of %q", path)
 	}
 	w.logger.Infof("Adding a watch on resolved path %q", absPath)
-	err = w.watcher.Add(absPath)
-	if err != nil {
-		if os.IsPermission(err) {
-			w.logger.Infof("Skipping permission denied error on adding a watch.")
-		} else {
-			return errors.Wrapf(err, "Failed to create a new watch on %q", absPath)
+	if w.watcher != nil {
+		err = w.watcher.Add(absPath)
+		if err != nil {
+			if os.IsPermission(err) {
+				w.logger.Infof("Skipping permission denied error on adding a watch.")
+			} else {
+				return errors.Wrapf(err, "Failed to create a new watch on %q", absPath)
+			}
 		}
 	}
 	w.watchedMu.Lock()
 	w.eventsMu.RLock()
-	w.watched[absPath] = w.events[handle]
+	w.watched[absPath] = &watch{c: w.events[handle]}
 	w.eventsMu.RUnlock()
 	w.watchedMu.Unlock()
 	return nil

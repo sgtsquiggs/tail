@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -220,15 +221,6 @@ func doFollow(fd *File, logger log.Logger) {
 	}
 }
 
-// pollHandles walks the handles map and polls them all in series.
-func (t *Tailer) pollHandles() {
-	t.handlesMu.RLock()
-	defer t.handlesMu.RUnlock()
-	for _, fd := range t.handles {
-		doFollow(fd, t.logger)
-	}
-}
-
 // watchDirname adds the directory containing a path to be watched.
 func (t *Tailer) watchDirname(pathname string) error {
 	absPath, err := filepath.Abs(pathname)
@@ -388,4 +380,39 @@ func (t *Tailer) WriteStatusHTML(w io.Writer) error {
 		})
 	}
 	return tpl.Execute(w, data)
+}
+
+// Gc removes file handles that have had no reads for 24h or more.
+func (t *Tailer) Gc() error {
+	t.handlesMu.Lock()
+	defer t.handlesMu.Unlock()
+	for k, v := range t.handles {
+		if time.Since(v.LastRead) > (time.Hour * 24) {
+			if err := t.w.Remove(v.Pathname); err != nil {
+				t.logger.Info(err)
+			}
+			if err := v.Close(); err != nil {
+				t.logger.Info(err)
+			}
+			delete(t.handles, k)
+		}
+	}
+	return nil
+}
+
+// StartExpiryLoop runs a permanent goroutine to expire metrics every duration.
+func (t *Tailer) StartGcLoop(duration time.Duration) {
+	if duration <= 0 {
+		t.logger.Info("Log handle expiration disabled")
+		return
+	}
+	go func() {
+		t.logger.Infof("Starting log handle expiry loop every %s", duration.String())
+		ticker := time.NewTicker(duration)
+		for range ticker.C {
+			if err := t.Gc(); err != nil {
+				t.logger.Info(err)
+			}
+		}
+	}()
 }

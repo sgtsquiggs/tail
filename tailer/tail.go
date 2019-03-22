@@ -242,7 +242,7 @@ func (t *Tailer) openLogPath(pathname string, seekToStart bool) error {
 		// Doesn't exist yet. We're watching the directory, so we'll pick it up
 		// again on create; return successfully.
 		if os.IsNotExist(err) {
-			t.logger.Infof("pathname %q doesn't exist (yet?)", f.Pathname)
+			t.logger.Infof("pathname %q doesn't exist (yet?)", pathname)
 			return nil
 		}
 		return err

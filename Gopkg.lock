@@ -10,6 +10,23 @@
   version = "v1.4.7"
 
 [[projects]]
+  digest = "1:9ab1b1c637d7c8f49e39d8538a650d7eb2137b076790cff69d160823b505964c"
+  name = "github.com/gobwas/glob"
+  packages = [
+    ".",
+    "compiler",
+    "match",
+    "syntax",
+    "syntax/ast",
+    "syntax/lexer",
+    "util/runes",
+    "util/strings",
+  ]
+  pruneopts = ""
+  revision = "5ccd90ef52e1e632236f7326478d4faa74f99438"
+  version = "v0.2.3"
+
+[[projects]]
   digest = "1:d2754cafcab0d22c13541618a8029a70a8959eb3525ff201fe971637e2274cd0"
   name = "github.com/google/go-cmp"
   packages = [
@@ -22,6 +39,14 @@
   pruneopts = "UT"
   revision = "3af367b6b30c263d47e8895973edcca9a49cf029"
   version = "v0.2.0"
+
+[[projects]]
+  digest = "1:a12b6f20a7e5eb7412d2e5cd15e1262a021f735fa958d664d9e7ba2160eefd0a"
+  name = "github.com/karrick/godirwalk"
+  packages = ["."]
+  pruneopts = ""
+  revision = "2de2192f9e35ce981c152a873ed943b93b79ced4"
+  version = "v1.7.5"
 
 [[projects]]
   digest = "1:cf31692c14422fa27c83a05292eb5cbe0fb2775972e8f1f8446a71549bd8980b"
@@ -44,8 +69,10 @@
   analyzer-version = 1
   input-imports = [
     "github.com/fsnotify/fsnotify",
+    "github.com/gobwas/glob",
     "github.com/google/go-cmp/cmp",
     "github.com/google/go-cmp/cmp/cmpopts",
+    "github.com/karrick/godirwalk",
     "github.com/pkg/errors",
   ]
   solver-name = "gps-cdcl"

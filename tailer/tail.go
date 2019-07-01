@@ -11,8 +11,6 @@ package tailer
 // directory.
 
 import (
-	"expvar"
-	"html/template"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,14 +19,10 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/sgtsquiggs/tail/internal/globpath"
 	log "github.com/sgtsquiggs/tail/logger"
 	"github.com/sgtsquiggs/tail/logline"
 	"github.com/sgtsquiggs/tail/watcher"
-)
-
-var (
-	// logCount records the number of logs that are being tailed
-	logCount = expvar.NewInt("log_count")
 )
 
 // Tailer receives notification of changes from a Watcher and extracts new log
@@ -41,8 +35,8 @@ type Tailer struct {
 	handlesMu sync.RWMutex     // protects `handles'
 	handles   map[string]*File // File handles for each pathname.
 
-	globPatternsMu sync.RWMutex        // protects `globPatterns'
-	globPatterns   map[string]struct{} // glob patterns to match newly created files in dir paths against
+	globPatternsMu sync.RWMutex         // protects `globPatterns'
+	globPatterns   []*globpath.GlobPath // glob patterns to match newly created files in dir paths against
 
 	runDone chan struct{} // Signals termination of the run goroutine.
 
@@ -82,7 +76,6 @@ func New(lines chan<- *logline.LogLine, w watcher.Watcher, options ...Option) (*
 		lines:        lines,
 		w:            w,
 		handles:      make(map[string]*File),
-		globPatterns: make(map[string]struct{}),
 		runDone:      make(chan struct{}),
 		logger:       log.DefaultLogger,
 	}
@@ -136,17 +129,17 @@ func (t *Tailer) hasHandle(pathname string) bool {
 }
 
 // AddPattern adds a pattern to the list of patterns to filter filenames against.
-func (t *Tailer) AddPattern(pattern string) error {
-	absPath, err := filepath.Abs(pattern)
+func (t *Tailer) AddPattern(pattern string) (*globpath.GlobPath, error) {
+	g, err := globpath.Compile(pattern)
 	if err != nil {
-		t.logger.Infof("Couldn't canonicalize path %q: %s", pattern, err)
-		return err
+		t.logger.Infof("Couldn't compile pattern %q: %s", pattern, err)
+		return nil, err
 	}
-	t.logger.Infof("AddPattern: %s", absPath)
+	t.logger.Infof("AddPattern: %s", pattern)
 	t.globPatternsMu.Lock()
-	t.globPatterns[absPath] = struct{}{}
+	t.globPatterns = append(t.globPatterns, g)
 	t.globPatternsMu.Unlock()
-	return nil
+	return g, nil
 }
 
 // TailPattern registers a pattern to be tailed.  If pattern is a plain
@@ -154,7 +147,8 @@ func (t *Tailer) AddPattern(pattern string) error {
 // all paths that match the glob are opened and watched, and the directories
 // containing those matches, if any, are watched.
 func (t *Tailer) TailPattern(pattern string) error {
-	if err := t.AddPattern(pattern); err != nil {
+	g, err := t.AddPattern(pattern)
+	if err != nil {
 		return err
 	}
 	// Add a watch on the containing directory, so we know when a rotation
@@ -162,10 +156,7 @@ func (t *Tailer) TailPattern(pattern string) error {
 	if err := t.watchDirname(pattern); err != nil {
 		return err
 	}
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return err
-	}
+	matches := g.Match()
 	t.logger.Infof("glob matches: %v", matches)
 	// Error if there are no matches, but if they show up later, they'll get picked up by the directory watch set above.
 	if len(matches) == 0 {
@@ -258,7 +249,6 @@ func (t *Tailer) openLogPath(pathname string, seekToStart bool) error {
 		return err
 	}
 	t.logger.Infof("Tailing %s", f.Pathname)
-	logCount.Add(1)
 	return nil
 }
 
@@ -267,17 +257,13 @@ func (t *Tailer) handleCreateGlob(pathname string) {
 	t.globPatternsMu.RLock()
 	defer t.globPatternsMu.RUnlock()
 
-	for pattern := range t.globPatterns {
-		matched, err := filepath.Match(pattern, pathname)
-		if err != nil {
-			t.logger.Warningf("Unexpected bad pattern %q not detected earlier", pattern)
-			continue
-		}
+	for _, g := range t.globPatterns {
+		matched := g.MatchString(pathname)
 		if !matched {
-			t.logger.Infof("%q did not match pattern %q", pathname, pattern)
+			t.logger.Infof("%q did not match pattern %q", pathname, g.Path())
 			continue
 		}
-		t.logger.Infof("New file %q matched existing glob %q", pathname, pattern)
+		t.logger.Infof("New file %q matched existing glob %q", pathname, g.Path())
 		// If this file was just created, read from the start of the file.
 		if err := t.openLogPath(pathname, true); err != nil {
 			t.logger.Infof("Failed to tail new file %q: %s", pathname, err)
@@ -309,77 +295,6 @@ func (t *Tailer) Close() error {
 	}
 	<-t.runDone
 	return nil
-}
-
-const tailerTemplate = `
-<h2 id="tailer">Log Tailer</h2>
-<h3>Patterns</h3>
-<ul>
-{{range $name, $val := $.Patterns}}
-<li><pre>{{$name}}</pre></li>
-{{end}}
-</ul>
-<h3>Log files watched</h3>
-<table border=1>
-<tr>
-<th>pathname</th>
-<th>errors</th>
-<th>rotations</th>
-<th>truncations</th>
-<th>lines read</th>
-</tr>
-{{range $name, $val := $.Handles}}
-<tr>
-<td><pre>{{$name}}</pre></td>
-<td>{{index $.Errors $name}}</td>
-<td>{{index $.Rotations $name}}</td>
-<td>{{index $.Truncs $name}}</td>
-<td>{{index $.Lines $name}}</td>
-</tr>
-{{end}}
-</table>
-</ul>
-`
-
-// WriteStatusHTML emits the Tailer's state in HTML format to the io.Writer w.
-func (t *Tailer) WriteStatusHTML(w io.Writer) error {
-	tpl, err := template.New("tailer").Parse(tailerTemplate)
-	if err != nil {
-		return err
-	}
-	t.handlesMu.RLock()
-	defer t.handlesMu.RUnlock()
-	t.globPatternsMu.RLock()
-	defer t.globPatternsMu.RUnlock()
-	data := struct {
-		Handles   map[string]*File
-		Patterns  map[string]struct{}
-		Rotations map[string]string
-		Lines     map[string]string
-		Errors    map[string]string
-		Truncs    map[string]string
-	}{
-		t.handles,
-		t.globPatterns,
-		make(map[string]string),
-		make(map[string]string),
-		make(map[string]string),
-		make(map[string]string),
-	}
-	for _, pair := range []struct {
-		v *expvar.Map
-		m map[string]string
-	}{
-		{logErrors, data.Errors},
-		{logRotations, data.Rotations},
-		{logTruncs, data.Truncs},
-		{lineCount, data.Lines},
-	} {
-		pair.v.Do(func(kv expvar.KeyValue) {
-			pair.m[kv.Key] = kv.Value.String()
-		})
-	}
-	return tpl.Execute(w, data)
 }
 
 // Gc removes file handles that have had no reads for 24h or more.

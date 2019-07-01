@@ -5,7 +5,6 @@ package tailer
 
 import (
 	"bytes"
-	"expvar"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,17 +16,6 @@ import (
 	"github.com/sgtsquiggs/tail/logline"
 
 	"github.com/pkg/errors"
-)
-
-var (
-	// logErrors counts the number of IO errors per log file
-	logErrors = expvar.NewMap("log_errors_total")
-	// logRotations counts the number of rotations per log file
-	logRotations = expvar.NewMap("log_rotations_total")
-	// logTruncs counts the number of log truncation events per log
-	logTruncs = expvar.NewMap("log_truncates_total")
-	// lineCount counts the numbre of lines read per log file
-	lineCount = expvar.NewMap("log_lines_total")
 )
 
 // File provides an abstraction over files and named pipes being tailed
@@ -64,7 +52,6 @@ func NewFile(pathname string, lines chan<- *logline.LogLine, seekToStart bool, l
 	fi, err := f.Stat()
 	if err != nil {
 		// Stat failed, log error and return.
-		logErrors.Add(absPath, 1)
 		return nil, errors.Wrapf(err, "Failed to stat %q", absPath)
 	}
 	regular := false
@@ -101,7 +88,6 @@ func open(pathname string, seenBefore bool, logger log.Logger) (*os.File, error)
 Retry:
 	f, err := os.OpenFile(pathname, os.O_RDONLY|syscall.O_NONBLOCK, 0600)
 	if err != nil {
-		logErrors.Add(pathname, 1)
 		if shouldRetry() {
 			retries--
 			time.Sleep(retryDelay)
@@ -154,7 +140,6 @@ func (f *File) doRotation() error {
 	if err := f.Read(); err != nil {
 		f.logger.Infof("%s: %s", f.Name, err)
 	}
-	logRotations.Add(f.Name, 1)
 	newFile, err := open(f.Pathname, true /*seenBefore*/, f.logger)
 	if err != nil {
 		return err
@@ -221,7 +206,6 @@ func (f *File) Read() error {
 // sendLine sends the contents of the partial buffer off for processing.
 func (f *File) sendLine() {
 	f.lines <- logline.NewLogLine(f.Name, f.partial.String())
-	lineCount.Add(f.Name, 1)
 	// reset partial accumulator
 	f.partial.Reset()
 }
@@ -255,7 +239,6 @@ func (f *File) checkForTruncate() (bool, error) {
 
 	p, serr := f.file.Seek(0, io.SeekStart)
 	f.logger.Infof("Truncated?  Seeked to %d: %v", p, serr)
-	logTruncs.Add(f.Name, 1)
 	return true, serr
 }
 

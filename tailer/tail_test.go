@@ -237,7 +237,9 @@ func TestTailerOpenRetries(t *testing.T) {
 		}
 		close(done)
 	}()
-	testutil.FatalIfErr(t, ta.AddPattern(logfile))
+	if _, err := ta.AddPattern(logfile); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := ta.TailPath(logfile); err == nil || !os.IsPermission(err) {
 		t.Fatalf("Expected a permission denied error here: %s", err)

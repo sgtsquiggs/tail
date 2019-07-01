@@ -204,7 +204,8 @@ func (w *LogWatcher) pollDirectoryLocked(c chan Event, pathname string) {
 			w.logger.Infof("No modtime change for %s, no send", match)
 		}
 		if fi.IsDir() {
-			w.pollDirectoryLocked(c, match)
+			// no recursion!
+			//w.pollDirectoryLocked(c, match)
 		}
 	}
 }
